@@ -206,7 +206,9 @@ def verify_glyph_width(
         print(f"✅ Verified glyph width in {file_name}")
         return
 
-    unexpected_glyphs = "\n".join([f"{item[0]}  =>  {item[1]}" for item in result])
+    unexpected_glyphs = "\n".join(
+        [f"{item[0]}  =>  {item[1]}" for item in result[1:20]]
+    )
 
     raise Exception(
         f"{file_name or 'The font'} may contains glyphs that width is not in {expect_widths}, which may broke monospace rule.\n{unexpected_glyphs}"
@@ -516,88 +518,13 @@ def add_gasp(font: TTFont):
     font["gasp"] = gasp
 
 
-def change_glyph_width_or_scale(
-    font: TTFont,
-    match_width: int,
-    target_width: int,
-    scale_factor: tuple[float, float],
-    skip_name: list[str],
-):
-    font["hhea"].advanceWidthMax = target_width  # type: ignore
-    for name in font.getGlyphOrder():
-        if name in skip_name:
-            continue
-
-        glyph = font["glyf"][name]  # type: ignore
-        width, lsb = font["hmtx"][name]  # type: ignore
-        if width != match_width:
-            continue
-        if glyph.numberOfContours == 0:
-            font["hmtx"][name] = (target_width, lsb)  # type: ignore
-            continue
-
-        scale_w, scale_h = scale_factor
-        glyph.coordinates.scale((scale_w, scale_h))
-        glyph.xMin, glyph.yMin, glyph.xMax, glyph.yMax = (
-            glyph.coordinates.calcIntBounds()
-        )
-
-        scaled_width = int(round(width * scale_w))
-        delta = (target_width - scaled_width) / 2
-
-        glyph.coordinates.translate((delta, 0))
-        glyph.xMin, glyph.yMin, glyph.xMax, glyph.yMax = (
-            glyph.coordinates.calcIntBounds()
-        )
-
-        new_lsb = lsb + int(round(delta))
-        font["hmtx"][name] = (target_width, new_lsb)  # type: ignore
-
-
-def expand_custom_tag_bg(font: TTFont):
+def remove_target_glyph(font: TTFont, glyph_name_suffix: str):
     """
-    ``*.bg*`` shift the right edge by 20
+    Remove glyphs from the font that end with the specified suffix.
     """
-    from fontTools.ttLib.tables._g_l_y_f import GlyphCoordinates
+    from fontTools.subset import Subsetter, Options
 
-    # Key: (x, y) -> Value: new x
-    offset = 20
-    target_map = {
-        (600, 1020): 600 + offset,
-        (600, -300): 600 + offset,
-        (10, 1020): offset,
-        (10, -300): offset,
-        (590, 1020): 600 - offset,
-        (590, -300): 600 - offset,
-    }
-
-    if "glyf" not in font:
-        return
-
-    glyf_table = font["glyf"]
-    glyph_order = font.getGlyphOrder()
-
-    bg_glyphs = [name for name in glyph_order if ".bg" in name]
-
-    for name in bg_glyphs:
-        glyph = glyf_table[name]  # type: ignore
-
-        # `*.bg*` is transformed in variable ttf, so there is no need to check if composited.
-        coordinates = glyph.coordinates
-
-        if len(coordinates) <= 4:
-            continue
-
-        new_coords = []
-        modified = False
-
-        for x, y in coordinates:
-            if (x, y) in target_map:
-                new_x = target_map[(x, y)]
-                new_coords.append((new_x, y))
-                modified = True
-            else:
-                new_coords.append((x, y))
-
-        if modified:
-            glyph.coordinates = GlyphCoordinates(new_coords)
+    keep_glyphs = [n for n in font.getGlyphOrder() if not n.endswith(glyph_name_suffix)]
+    subsetter = Subsetter(Options(hinting=False))
+    subsetter.populate(glyphs=keep_glyphs)
+    subsetter.subset(font)
